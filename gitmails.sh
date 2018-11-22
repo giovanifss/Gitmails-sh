@@ -9,6 +9,7 @@ trap "echo -e '\nAborting...'" INT
 BITBUCKET_API=""
 GITHUB_API="https://api.github.com"
 GITLAB_API=""
+DEPENDENCIES="tr jq awk sed cat git echo curl sort uniq mkdir"
 
 #------------------
 # Gitmails Options
@@ -42,14 +43,10 @@ get_raw_attr () {
 	echo "$1" | jq -r "$2"
 }
 
-expected_arg () {
-	echoerr "error: expected argument after $1 option"
-	exit 1
-}
-
 check_second_arg () {
 	if [ -z "$1" ] || [[ "$1" == "-*" ]]; then
-		expected_arg "$2"
+		echoerr "error: expected argument after $2 option"
+		exit 1
 	fi
 }
 
@@ -78,6 +75,17 @@ check_services () {
 		echoerr "use -h or --help to see available options"
 		exit 3
 	fi
+}
+
+check_dependencies () {
+	missing=false
+	for dep in $DEPENDENCIES; do
+		if ! command -v "${dep}" 2>&1 > /dev/null; then
+			echoerr "error: missing required dependency '${dep}'"
+			missing=true
+		fi
+	done
+	${missing} && exit 4
 }
 
 set_variables () {
@@ -198,7 +206,6 @@ analyze_repo () {
 		git log --all --format='%aN <%aE>' | sort | uniq -c | sort -bgr > "$3/mailmap_authors"
 		git log --all --format='%cN <%cE>' | sort | uniq -c | sort -bgr > "$3/mailmap_commiters"
 		git log --all --format='%GS <%GK?' | sort | uniq -c | sort -bgr > "$3/signer_info"
-		#cat "$3/authors" "$3/commiter" "$3/mailmap_authors" "$3/mailmap_commiters"
 	)
 }
 
@@ -269,5 +276,6 @@ main () {
 	esac
 }
 
+check_dependencies
 parse_args $@
 main
