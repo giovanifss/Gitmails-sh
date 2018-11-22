@@ -1,60 +1,34 @@
 #!/bin/sh
 
 set -e
-set -x
-#trap bye_bye INT
+trap "echo -e '\nAborting...'" INT
 
-USERNAME=""
-
-SEPARATOR="|:|"
-
-BASE_PATH="/tmp/gitmails"
-GITHUB_PATH="${BASE_PATH}/github"
-GILLAB_PATH="${BASE_PATH}/gitlab"
-BITBUCKET_PATH="${BASE_PATH}/bitbucket"
-
+#--------------------
+# Gitmails Constants
+#--------------------
 BITBUCKET_API=""
 GITHUB_API="https://api.github.com"
 GITLAB_API=""
 
-GITHUB_USER_ATTRIBUTES="login                 id                node_id           \
-			avatar_url            gravatar_id       url               \
-			html_url              followers_url     following_url     \
-			gists_url             starred_url       subscriptions_url \
-			organizations_url     repos_url         events_url        \
-			received_events_url   type              site_admin        \
-			name                  company           blog              \
-			location email        hireable bio      public_repos      \
-			public_gists          followers         following         \
-			created_at updated_at"					  \
+#------------------
+# Gitmails Options
+#------------------
+TARGET=""
+TARGET_TYPE=""
 
-GITHUB_REPO_ATTRIBUTES="id                node_id              name               \
-			full_name         private              html_url           \
-			description       fork                 url                \
-			forks_url         keys_url             collaborators_url  \
-			teams_url         hooks_url            issue_events_url   \
-			events_url        assignees_url        branches_url       \
-			tags_url          blobs_url            git_tags_url       \
-			git_refs_url      trees_url            statuses_url       \
-			languages_url     stargazers_url       contributors_url   \
-			subscribers_url   subscriptions_url    commits_url        \
-			git_commits_url   comments_url         issue_comment_url  \
-			contents_url      compare_url          merges_url         \
-			archive_url       downloads_url        issues_url         \
-			pulls_url         milestones_url       notifications_url  \
-			labels_url        releases_url         deployments_url    \
-			created_at        updated_at           pushed_at          \
-			git_url           ssh_url              clone_url          \
-			svn_url           homepage             size               \
-			has_issues        has_projects         has_downloads      \
-			has_wiki          has_pages            forks_count        \
-			mirror_url        archived             open_issues_count  \
-			forks             open_issues          watchers           \
-			default_branch    license"
+TMP_PATH=""
+BASE_PATH="/tmp/gitmails"
+GITHUB_PATH=""
+GITLAB_PATH=""
+BITBUCKET_PATH=""
 
-bye_bye () {
-	echo -e "\nAborting..."
-}
+#----------------
+# Gitmails Flags
+#----------------
+GITHUB=true
+GITLAB=true
+BITBUCKET=true
+
 
 echoerr () {
 	echo "$@" 1>&2
@@ -68,11 +42,130 @@ get_raw_attr () {
 	echo "$1" | jq -r "$2"
 }
 
-parse_fields () {
-	for f in $2; do
-		field=$(echo "${f}" | tr -d '[:space:]')
-		echo "${field}${SEPARATOR}$(get_attr "$1" ".${field}")"
+expected_arg () {
+	echoerr "error: expected argument after $1 option"
+	exit 1
+}
+
+check_second_arg () {
+	if [ -z "$1" ] || [[ "$1" == "-*" ]]; then
+		expected_arg "$2"
+	fi
+}
+
+set_variables () {
+	export TMP_PATH="$BASE_PATH/tmp/$TARGET"
+	export GITHUB_PATH="$BASE_PATH/$TARGET/github"
+	export GILLAB_PATH="$BASE_PATH/$TARGET/gitlab"
+	export BITBUCKET_PATH="$BASE_PATH/$TARGET/bitbucket"
+}
+
+check_target () {
+	if [ -z "$TARGET" ]; then
+		echoerr "error: target not specified. Use -u|--user, -o|--org or -r|--repo to specify a target"
+		echoerr "usage: gitmails <target> [options]"
+		echoerr "use -h or --help to see available options"
+		exit 2
+	fi
+}
+
+set_target () {
+	if [ ! -z "$TARGET" ]; then
+		echoerr "gitmails: target must be specified only once"
+		exit 2
+	fi
+	TARGET="$1"
+	TARGET_TYPE="$2"
+}
+
+check_services () {
+	if ! $GITHUB && ! $GITLAB && ! $BITBUCKET; then
+		echoerr "error: at least one host service must be collectable"
+		echoerr "specify one of --github, --gitlab or --bitbucket"
+		echoerr "use -h or --help to see available options"
+		exit 3
+	fi
+}
+
+display_help () {
+	echo "usage: gitmails <target> [options] [flags]"
+	echo
+	echo "target: user, organization or repository"
+	echo -e "\t-u|--user: specify a user as target"
+	echo -e "\t-r|--repo: specify a repository as target"
+	echo -e "\t-o|--org:  specify an organization as target"
+	echo
+	echo "options:"
+	echo -e "\t-h|--help: display this message"
+	echo -e "\t-V|--version: display version information"
+	echo -e "\t-b|--base-dir: specify the base directory for gitmails to work on"
+	echo
+	echo "flags:"
+	echo -e "\t--github: collect information only on github"
+	echo -e "\t--gitlab: collect information only on gitlab"
+	echo -e "\t--bitbucket: collect information only on bitbucket"
+	echo -e "\t--no-github: skip information collection on github"
+	echo -e "\t--no-gitlab: skip information collection on gitlab"
+	echo -e "\t--no-bitbucket: skip information collection on bitbucket"
+}
+
+parse_args () {
+	if [ $# -eq 0 ]; then
+		display_help
+		exit 1
+	fi
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-V|--version)
+				echo "author: giovanifss"
+				echo "source: https://github.com/giovanifss/Gitmails-sh"
+				echo "license: MIT"
+				echo "version: 1.0"
+				exit 0;;
+			-h|--help)
+				display_help
+				exit 0;;
+			-b|--base-dir)
+				check_second_arg "$2" "base-dir"
+				BASE_PATH="$2"
+				shift;;
+			-u|--user)
+				check_second_arg "$2" "user"
+				set_target "$2" "user"
+				shift;;
+			-r|--repo)
+				check_second_arg "$2" "repository"
+				set_target "$2" "repo"
+				shift;;
+			-o|--org)
+				check_second_arg "$2" "organization"
+				set_target "$2" "org"
+				shift;;
+			--github)
+				GITLAB=false
+				BITBUCKET=false;;
+			--gitlab)
+				GITHUB=false
+				BITBUCKET=false;;
+			--bitbucket)
+				GITHUB=false
+				GITLAB=false;;
+			--no-github)
+				GITHUB=false;;
+			--no-gitlab)
+				GITLAB=false;;
+			--no-bitbucket)
+				BITBUCKET=false;;
+			*)
+				echoerr "error: unknown argument '$1'"
+				echoerr "use -h or --help to see available options"
+				exit 1;;
+		esac
+		shift
 	done
+	check_target
+	check_services
+	set_variables
 }
 
 make_request () {
@@ -90,23 +183,36 @@ make_request () {
 
 analyze_repo () {
 	mkdir -p "$2"
+	mkdir -p "$3"
 	echo "Clonning repo $1 in $2"
 	git clone --quiet --bare "$1" "$2"
 	(
 		cd "$2"
-		git log --all --format='%aN <%cE>' | sort | uniq -c | sort -bgr > "$2/unique_authors"
+		git log --all --format='%an <%ae>' | sort | uniq -c | sort -bgr > "$3/authors"
+		git log --all --format='%cn <%ce>' | sort | uniq -c | sort -bgr > "$3/commiters"
+		git log --all --format='%aN <%aE>' | sort | uniq -c | sort -bgr > "$3/mailmap_authors"
+		git log --all --format='%cN <%cE>' | sort | uniq -c | sort -bgr > "$3/mailmap_commiters"
+		git log --all --format='%GS <%GK?' | sort | uniq -c | sort -bgr > "$3/signer_info"
+		#cat "$3/authors" "$3/commiter" "$3/mailmap_authors" "$3/mailmap_commiters"
 	)
 }
 
 collect_github_user () {
 	user=$(make_request "${GITHUB_API}"/users/"$1")
 	test "$?" -ne 0 && return 1
-	mkdir -p "$GITHUB_PATH/users/$1"
-	parse_fields "${user}" "${GITHUB_USER_ATTRIBUTES}" > "$GITHUB_PATH/users/$1/attributes"
+	mkdir -p "$GITHUB_PATH"
+	echo "${user}" > "$GITHUB_PATH/attributes"
 }
 
-#github_repo () {
-#}
+collect_repo () {
+	set -x
+	repo_url=$(get_raw_attr "$1" "$2")
+	repo_name=$(get_raw_attr "$1" "$3" | tr '/' '_')
+	mkdir -p "$4"
+	mkdir -p "$5/${repo_name}"
+	echo "$1" > "$5/${repo_name}/attributes"
+	analyze_repo "${repo_url}" "$4/${repo_name}" "$5/${repo_name}"
+}
 
 collect_github_repos_from_user () {
 	repos=$(make_request "${GITHUB_API}/users/$1/repos")
@@ -118,23 +224,37 @@ collect_github_repos_from_user () {
 	pids=""
 	counter=0
 	while [ "${counter}" -lt "${github_qtd_repos}" ]; do
-		#(
-		repo=$(get_attr "${repos}" ".[${counter}]")
-		mkdir -p "$GITHUB_PATH/repos/${counter}"
-		parse_fields "${repo}" "${GITHUB_REPO_ATTRIBUTES}" > "$GITHUB_PATH/repos/${counter}/attributes"
-		repo_url=$(get_raw_attr "${repo}" ".clone_url")
-		mkdir -p "$GITHUB_PATH/tmp"
-		analyze_repo "${repo_url}" "$GITHUB_PATH/tmp/${counter}"
-		#) &
-		#pids="${pids} $!"
+		(
+			repo=$(get_attr "${repos}" ".[${counter}]")
+			collect_repo "${repo}" ".clone_url" ".name" "$TMP_PATH/github" "$GITHUB_PATH/repos"
+		) &
+		pids="${pids} $!"
 		true $(( counter++ ))
 	done
-	#wait ${pids}
+	wait ${pids}
+}
+
+collect_user () {
+	if $GITHUB; then
+		collect_github_user "$TARGET"
+		collect_github_repos_from_user "$TARGET"
+	fi
+}
+
+collect_org () {
+	echo "bla"
 }
 
 main () {
-	#collect_github_user "$USERNAME"
-	collect_github_repos_from_user "$USERNAME"
+	case "$TARGET_TYPE" in
+		repo)
+			collect_repo;;
+		user)
+			collect_user;;
+		org)
+			collect_org;;
+	esac
 }
 
+parse_args $@
 main
