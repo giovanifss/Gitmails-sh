@@ -53,13 +53,6 @@ check_second_arg () {
 	fi
 }
 
-set_variables () {
-	export TMP_PATH="$BASE_PATH/tmp/$TARGET"
-	export GITHUB_PATH="$BASE_PATH/$TARGET/github"
-	export GILLAB_PATH="$BASE_PATH/$TARGET/gitlab"
-	export BITBUCKET_PATH="$BASE_PATH/$TARGET/bitbucket"
-}
-
 check_target () {
 	if [ -z "$TARGET" ]; then
 		echoerr "error: target not specified. Use -u|--user, -o|--org or -r|--repo to specify a target"
@@ -85,6 +78,18 @@ check_services () {
 		echoerr "use -h or --help to see available options"
 		exit 3
 	fi
+}
+
+set_variables () {
+	if [ "$TARGET_TYPE" == "repo" ]; then
+		export TMP_PATH="$BASE_PATH/tmp/repos"
+	else
+		export TMP_PATH="$BASE_PATH/tmp/$TARGET"
+	fi
+	export REPOS_PATH="$BASE_PATH/repos"
+	export GITHUB_PATH="$BASE_PATH/$TARGET/github"
+	export GILLAB_PATH="$BASE_PATH/$TARGET/gitlab"
+	export BITBUCKET_PATH="$BASE_PATH/$TARGET/bitbucket"
 }
 
 display_help () {
@@ -197,7 +202,7 @@ analyze_repo () {
 	)
 }
 
-collect_github_user () {
+collect_github_user_info () {
 	user=$(make_request "${GITHUB_API}"/users/"$1")
 	test "$?" -ne 0 && return 1
 	mkdir -p "$GITHUB_PATH"
@@ -205,7 +210,6 @@ collect_github_user () {
 }
 
 collect_repo () {
-	set -x
 	repo_url=$(get_raw_attr "$1" "$2")
 	repo_name=$(get_raw_attr "$1" "$3" | tr '/' '_')
 	mkdir -p "$4"
@@ -234,10 +238,19 @@ collect_github_repos_from_user () {
 	wait ${pids}
 }
 
+collect_github_user () {
+	collect_github_user_info "$TARGET"
+	collect_github_repos_from_user "$TARGET"
+}
+
+collect_repo_from_url () {
+	repo_name=$(echo "$1" | awk -F "://" '{print $2}' | tr '/' '_')
+	analyze_repo "$1" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}"
+}
+
 collect_user () {
 	if $GITHUB; then
 		collect_github_user "$TARGET"
-		collect_github_repos_from_user "$TARGET"
 	fi
 }
 
@@ -248,7 +261,7 @@ collect_org () {
 main () {
 	case "$TARGET_TYPE" in
 		repo)
-			collect_repo;;
+			collect_repo_from_url "$TARGET";;
 		user)
 			collect_user;;
 		org)
