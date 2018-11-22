@@ -186,7 +186,7 @@ make_request () {
 	body=$(echo "${result}" | sed -e 's/HTTPSTATUS\:.*//g')
 	status_code=$(echo "${result}" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
 	if [ "${status_code}" -ne 200 ]; then
-		echoerr "gitmails: HTTP request returned status code ${status_code}"
+		echoerr "gitmails: HTTP request returned status code '${status_code}'"
 		return 1
 	else
 		echo "${body}"
@@ -225,24 +225,29 @@ collect_repo () {
 	analyze_repo "${repo_url}" "$4/${repo_name}" "$5/${repo_name}"
 }
 
-collect_github_repos_from_user () {
-	repos=$(make_request "${GITHUB_API}/users/$1/repos")
-	if [ "$?" -ne 0 ]; then
-		echoerr "gitmails: Couldn't collect github repositories"
+collect_repos () {
+	repos=$(make_request "$1")
+	if [ $? -ne 0 ]; then
+		echoerr "gitmails: Couldn't collect $2 repositories"
 		return 1
 	fi
-	github_qtd_repos=$(expr `get_attr "${repos}" length` - 1)
+	qtd_repos=$(expr `get_attr "${repos}" length` - 1)
 	pids=""
 	counter=0
-	while [ "${counter}" -lt "${github_qtd_repos}" ]; do
+	while [ "${counter}" -lt "${qtd_repos}" ]; do
 		(
 			repo=$(get_attr "${repos}" ".[${counter}]")
-			collect_repo "${repo}" ".clone_url" ".name" "$TMP_PATH/github" "$GITHUB_PATH/repos"
+			collect_repo "${repo}" "$3" "$4" "$TMP_PATH/$2" "$5"
 		) &
 		pids="${pids} $!"
 		true $(( counter++ ))
 	done
 	wait ${pids}
+}
+
+collect_github_repos_from_user () {
+	echo "Collecting github repositories for user $1"
+	collect_repos "$GITHUB_API/users/$1/repos" "github" ".clone_url" ".name" "$GITHUB_PATH/repos"
 }
 
 collect_github_user () {
