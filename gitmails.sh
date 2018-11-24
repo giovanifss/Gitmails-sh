@@ -219,7 +219,7 @@ collect_user_info () {
 	echo "${info}" | jq > "$4/$2"
 }
 
-collect_repo () {
+parse_repo () {
 	repo_url=$(get_raw_attr "$1" "$2")
 	repo_name=$(get_raw_attr "$1" "$3" | tr '/' '_')
 	mkdir -p "$4"
@@ -228,19 +228,14 @@ collect_repo () {
 	analyze_repo "${repo_url}" "$4/${repo_name}" "$5/${repo_name}"
 }
 
-collect_repos () {
-	repos=$(make_request "$1")
-	if [ $? -ne 0 ]; then
-		echoerr "gitmails: Couldn't collect $2 repositories"
-		return 1
-	fi
-	qtd_repos=$(expr `get_attr "${repos}" length` - 1)
+parse_repos () {
 	pids=""
 	counter=0
+	qtd_repos=$(expr `get_attr "$1" length` - 1)
 	while [ "${counter}" -lt "${qtd_repos}" ]; do
 		(
-			repo=$(get_attr "${repos}" ".[${counter}]")
-			collect_repo "${repo}" "$3" "$4" "$TMP_PATH/$2" "$5"
+			repo=$(get_attr "$1" ".[${counter}]")
+			parse_repo "${repo}" "$3" "$4" "$TMP_PATH/$2" "$5"
 		) &
 		pids="${pids} $!"
 		true $(( counter++ ))
@@ -248,9 +243,21 @@ collect_repos () {
 	wait ${pids}
 }
 
-collect_repo_from_url () {
-	repo_name=$(echo "$1" | awk -F "://" '{print $2}' | tr '/' '_')
-	analyze_repo "$1" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}"
+# $1 = url with api endpoint to collect repos
+# $2 = service_name (e.g. github)
+# $3 = field of url to clone location in json to be used with jq (e.g. .clone_url)
+# $4 = field of repository name to be used with jq (e.g. .name)
+# $5 = path to repos location (e.g. $GITHUB_PATH/repos)
+# TODO: PAGINATION
+collect_repos () {
+	# while pagination
+	repos=$(make_request "$1")
+	if [ $? -ne 0 ]; then
+		echoerr "gitmails: Couldn't collect $2 repositories"
+		return 1
+	fi
+	# get repos json from json if needed
+	parse_repos "${repos}" "$2" "$3" "$4" "$5"
 }
 
 collect_github_user () {
@@ -271,9 +278,11 @@ collect_gitlab_user () {
 	collect_repos "$GITLAB_API/users/${userid}/projects" "gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
 }
 
-collect_user () {
-	$GITHUB && collect_github_user "$TARGET"
-	$GITLAB && collect_gitlab_user "$TARGET"
+collect_bitbucket_user () {
+	echo "Collecting bitbucket information for user '$1'"
+	collect_user_info "$BITBUCKET_API/users/$1" "attributes" "$1" "$BITBUCKET_PATH"
+	echo "Collecting bitbucket repositories for user '$1'"
+	# collect_repos "$BITBUCKET_API/repositories/$1" "bitbucket"
 }
 
 collect_org () {
@@ -283,11 +292,13 @@ collect_org () {
 main () {
 	case "$TARGET_TYPE" in
 		repo)
-			collect_repo_from_url "$TARGET";;
+			repo_name=$(echo "$TARGET" | awk -F "://" '{print $2}' | tr '/' '_')
+			analyze_repo "$TARGET" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}";;
 		user)
-			collect_user;;
+			$GITHUB && collect_github_user "$TARGET"
+			$GITLAB && collect_gitlab_user "$TARGET";;
 		org)
-			collect_org;;
+			collect_org  "$TARGET";;
 	esac
 }
 
