@@ -6,9 +6,9 @@ trap "echo -e '\nAborting...'" INT
 #--------------------
 # Gitmails Constants
 #--------------------
-BITBUCKET_API=""
 GITHUB_API="https://api.github.com"
-GITLAB_API=""
+GITLAB_API="https://gitlab.com/api/v4"
+BITBUCKET_API="https://api.bitbucket.org/2.0"
 DEPENDENCIES="tr jq awk sed cat git echo curl sort uniq mkdir"
 
 #------------------
@@ -96,7 +96,7 @@ set_variables () {
 	fi
 	export REPOS_PATH="$BASE_PATH/repos"
 	export GITHUB_PATH="$BASE_PATH/$TARGET/github"
-	export GILLAB_PATH="$BASE_PATH/$TARGET/gitlab"
+	export GITLAB_PATH="$BASE_PATH/$TARGET/gitlab"
 	export BITBUCKET_PATH="$BASE_PATH/$TARGET/bitbucket"
 }
 
@@ -209,11 +209,14 @@ analyze_repo () {
 	)
 }
 
-collect_github_user_info () {
-	user=$(make_request "${GITHUB_API}"/users/"$1")
-	test "$?" -ne 0 && return 1
-	mkdir -p "$GITHUB_PATH"
-	echo "${user}" > "$GITHUB_PATH/attributes"
+collect_user_info () {
+	info=$(make_request "$1")
+	if [ $? -ne 0 ]; then
+		echoerr "gitmails: Could not collect $2 of user '$3'"
+		return 1
+	fi
+	mkdir -p "$4"
+	echo "${info}" | jq > "$4/$2"
 }
 
 collect_repo () {
@@ -245,25 +248,32 @@ collect_repos () {
 	wait ${pids}
 }
 
-collect_github_repos_from_user () {
-	echo "Collecting github repositories for user $1"
-	collect_repos "$GITHUB_API/users/$1/repos" "github" ".clone_url" ".name" "$GITHUB_PATH/repos"
-}
-
-collect_github_user () {
-	collect_github_user_info "$TARGET"
-	collect_github_repos_from_user "$TARGET"
-}
-
 collect_repo_from_url () {
 	repo_name=$(echo "$1" | awk -F "://" '{print $2}' | tr '/' '_')
 	analyze_repo "$1" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}"
 }
 
+collect_github_user () {
+	echo "Collecting github information for user '$1'"
+	collect_user_info "$GITHUB_API/users/$1" "attributes" "$1" "$GITHUB_PATH"
+	echo "Collecting github repositories for user '$1'"
+	collect_repos "$GITHUB_API/users/$1/repos" "github" ".clone_url" ".name" "$GITHUB_PATH/repos"
+}
+
+collect_gitlab_user () {
+	echo "Collecting gitlab information for user '$1'"
+	users=$(make_request "$GITLAB_API/users?username=$1")
+	userid=$(get_raw_attr "${users}" ".[0].id")
+	collect_user_info "$GITLAB_API/users/${userid}" "attributes" "$1" "$GITLAB_PATH"
+	collect_user_info "$GITLAB_API/users/${userid}/keys" "keys" "$1" "$GITLAB_PATH"
+	collect_user_info "$GITLAB_API/users/${userid}/status" "status" "$1" "$GITLAB_PATH"
+	echo "Collecting gitlab repositories for user '$1'"
+	collect_repos "$GITLAB_API/users/${userid}/projects" "gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
+}
+
 collect_user () {
-	if $GITHUB; then
-		collect_github_user "$TARGET"
-	fi
+	$GITHUB && collect_github_user "$TARGET"
+	$GITLAB && collect_gitlab_user "$TARGET"
 }
 
 collect_org () {
