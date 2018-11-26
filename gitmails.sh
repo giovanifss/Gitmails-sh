@@ -182,14 +182,19 @@ parse_args () {
 }
 
 make_request () {
-	result=$(curl --silent -w 'HTTPSTATUS:%{http_code}' "$1")
-	body=$(echo "${result}" | sed -e 's/HTTPSTATUS\:.*//g')
+	cmd="curl"
+	if [ ! -z "$2" ]; then
+		cmd="${cmd} $2"
+	fi
+	cmd="${cmd} --silent -w HTTPSTATUS:%{http_code} $1"
+	result=$(${cmd})
+	content=$(echo "${result}" | sed -e 's/HTTPSTATUS\:.*//g')
 	status_code=$(echo "${result}" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
 	if [ "${status_code}" -ne 200 ]; then
 		echoerr "gitmails: HTTP request returned status code '${status_code}'"
 		return 1
 	else
-		echo "${body}"
+		echo "${content}"
 		return 0
 	fi
 }
@@ -205,7 +210,7 @@ analyze_repo () {
 		git log --all --format='%cn <%ce>' | sort | uniq -c | sort -bgr > "$3/commiters"
 		git log --all --format='%aN <%aE>' | sort | uniq -c | sort -bgr > "$3/mailmap_authors"
 		git log --all --format='%cN <%cE>' | sort | uniq -c | sort -bgr > "$3/mailmap_commiters"
-		git log --all --format='%GS <%GK?' | sort | uniq -c | sort -bgr > "$3/signer_info"
+		git log --all --format='%GS <%GK>' | sort | uniq -c | sort -bgr > "$3/signer_info"
 	)
 }
 
@@ -243,25 +248,30 @@ parse_repos () {
 	wait ${pids}
 }
 
-# | grep "^Link" | cut -d ',' -f2 | sed -e 's/&/\n/g' | grep "^page" | cut -d '=' -f2
-pagination_gitlab () {
-	result=$(curl --head --silent "$1")
-	qtd_pages=$(echo "${result}" | grep "Link" | cut -d ',' -f2 | sed -e 's/&per_page=/\n/' | head -n1 | rev | cut -d '=' -f1 | rev)
-	count=0
-	while [ "${count}" -lt "${qtd_pages}" ]; do
-		parse_repos
-	done
-}
-
-pagination_github () {
-	result=$(curl --head --silent "$1")
-	if grep --quiet "Link" "${result}"; then
-		qtd_pages=$(echo "${result}" | grep "^Link" | cut -d ',' -f2 | cut -d '>' -f1 | rev | cut -d '=' -f1 | rev)
-		count=0
-		while [ "${count}" -lt "${qtd_pages}" ]; do
-			parse_repos
-		done
+collect_repos_with_link_header_pagination () {
+	result=$(make_request "$1" --head)
+	qtd_pages=1
+	link_header=$(echo "${result}" | grep "^Link" || true)
+	if [ ! -z "${link_header}" ]; then
+		qtd_pages=$(echo "${link_header}" | cut -d ',' -f2 | awk '{ gsub("'"$2"'", "\n") ; print $0 }' \
+			| head -n1 | rev | cut -d '=' -f1 | rev)
 	fi
+	pids=""
+	counter=1
+	while [ "${counter}" -le "${qtd_pages}" ]; do
+		repos=$(make_request "$1?page=${counter}")
+		if [ $? -ne 0 ]; then
+			echoerr "gitmails: Couldn't collect page ${counter} of ${qtd_pages} from $3 repositories in $4"
+			continue
+		fi
+		parse_repos "${repos}" "$4" "$5" "$6" "$7" &
+		pids="${pids} $!"
+		# Sleep to wait previous clones to at least be closer to finishing
+		# Hopes to avoid too many git clone processes running at the same time
+		sleep 2
+		true $(( counter++ ))
+	done
+	wait ${pids}
 }
 
 pagination_bitbucket () {
@@ -295,7 +305,8 @@ collect_github_user () {
 	echo "Collecting github information for user '$1'"
 	collect_user_info "$GITHUB_API/users/$1" "attributes" "$1" "$GITHUB_PATH"
 	echo "Collecting github repositories for user '$1'"
-	collect_repos "$GITHUB_API/users/$1/repos" "github" ".clone_url" ".name" "$GITHUB_PATH/repos"
+	collect_repos_with_link_header_pagination "$GITHUB_API/users/$1/repos" ">" "$1" \
+		"github" ".clone_url" ".name" "$GITHUB_PATH/repos"
 }
 
 collect_gitlab_user () {
@@ -306,7 +317,8 @@ collect_gitlab_user () {
 	collect_user_info "$GITLAB_API/users/${userid}/keys" "keys" "$1" "$GITLAB_PATH"
 	collect_user_info "$GITLAB_API/users/${userid}/status" "status" "$1" "$GITLAB_PATH"
 	echo "Collecting gitlab repositories for user '$1'"
-	collect_repos "$GITLAB_API/users/${userid}/projects" "gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
+	collect_repos_with_link_header_pagination "$GITLAB_API/users/${userid}/projects" "&per_page" "$1" \
+		"gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
 }
 
 collect_bitbucket_user () {
@@ -326,8 +338,12 @@ main () {
 			repo_name=$(echo "$TARGET" | awk -F "://" '{print $2}' | tr '/' '_')
 			analyze_repo "$TARGET" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}";;
 		user)
-			$GITHUB && collect_github_user "$TARGET"
-			$GITLAB && collect_gitlab_user "$TARGET";;
+			if $GITHUB; then
+				collect_github_user "$TARGET"
+			fi
+			if $GITLAB; then
+				collect_gitlab_user "$TARGET"
+			fi;;
 		org)
 			collect_org  "$TARGET";;
 	esac
