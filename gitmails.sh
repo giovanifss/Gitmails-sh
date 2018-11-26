@@ -243,6 +243,37 @@ parse_repos () {
 	wait ${pids}
 }
 
+# | grep "^Link" | cut -d ',' -f2 | sed -e 's/&/\n/g' | grep "^page" | cut -d '=' -f2
+pagination_gitlab () {
+	result=$(curl --head --silent "$1")
+	qtd_pages=$(echo "${result}" | grep "Link" | cut -d ',' -f2 | sed -e 's/&per_page=/\n/' | head -n1 | rev | cut -d '=' -f1 | rev)
+	count=0
+	while [ "${count}" -lt "${qtd_pages}" ]; do
+		parse_repos
+	done
+}
+
+pagination_github () {
+	result=$(curl --head --silent "$1")
+	if grep --quiet "Link" "${result}"; then
+		qtd_pages=$(echo "${result}" | grep "^Link" | cut -d ',' -f2 | cut -d '>' -f1 | rev | cut -d '=' -f1 | rev)
+		count=0
+		while [ "${count}" -lt "${qtd_pages}" ]; do
+			parse_repos
+		done
+	fi
+}
+
+pagination_bitbucket () {
+	result=$(curl --silent "$1")
+	parse_repos # echo ${results} | jq .values
+	while echo "${result}" | jq -re '.next'; do
+		url=$(echo "${result}" | jq -re '.next')
+		result=$(make_request "${url}")
+		parse_repos # echo ${results} | jq .values
+	done
+}
+
 # $1 = url with api endpoint to collect repos
 # $2 = service_name (e.g. github)
 # $3 = field of url to clone location in json to be used with jq (e.g. .clone_url)
