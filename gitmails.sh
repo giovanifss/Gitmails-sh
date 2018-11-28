@@ -214,14 +214,14 @@ analyze_repo () {
 	)
 }
 
-collect_user_info () {
+collect_info () {
 	info=$(make_request "$1")
 	if [ $? -ne 0 ]; then
-		echoerr "gitmails: Could not collect $2 of user '$3'"
+		echoerr "gitmails: Could not collect $2 of $3 '$4'"
 		return 1
 	fi
-	mkdir -p "$4"
-	echo "${info}" | jq > "$4/$2"
+	mkdir -p "$5"
+	echo "${info}" | jq > "$5/$2"
 }
 
 parse_repo () {
@@ -303,7 +303,7 @@ collect_repos () {
 
 collect_github_user () {
 	echo "Collecting github information for user '$1'"
-	collect_user_info "$GITHUB_API/users/$1" "attributes" "$1" "$GITHUB_PATH"
+	collect_info "$GITHUB_API/users/$1" "attributes" "user" "$1" "$GITHUB_PATH"
 	echo "Collecting github repositories for user '$1'"
 	collect_repos_with_link_header_pagination "$GITHUB_API/users/$1/repos" ">" "$1" \
 		"github" ".clone_url" ".name" "$GITHUB_PATH/repos"
@@ -313,9 +313,9 @@ collect_gitlab_user () {
 	echo "Collecting gitlab information for user '$1'"
 	users=$(make_request "$GITLAB_API/users?username=$1")
 	userid=$(get_raw_attr "${users}" ".[0].id")
-	collect_user_info "$GITLAB_API/users/${userid}" "attributes" "$1" "$GITLAB_PATH"
-	collect_user_info "$GITLAB_API/users/${userid}/keys" "keys" "$1" "$GITLAB_PATH"
-	collect_user_info "$GITLAB_API/users/${userid}/status" "status" "$1" "$GITLAB_PATH"
+	collect_info "$GITLAB_API/users/${userid}" "attributes" "user" "$1" "$GITLAB_PATH"
+	collect_info "$GITLAB_API/users/${userid}/keys" "keys" "user" "$1" "$GITLAB_PATH"
+	collect_info "$GITLAB_API/users/${userid}/status" "status" "user" "$1" "$GITLAB_PATH"
 	echo "Collecting gitlab repositories for user '$1'"
 	collect_repos_with_link_header_pagination "$GITLAB_API/users/${userid}/projects" "&per_page" "$1" \
 		"gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
@@ -323,9 +323,27 @@ collect_gitlab_user () {
 
 collect_bitbucket_user () {
 	echo "Collecting bitbucket information for user '$1'"
-	collect_user_info "$BITBUCKET_API/users/$1" "attributes" "$1" "$BITBUCKET_PATH"
+	collect_info "$BITBUCKET_API/users/$1" "attributes" "user" "$1" "$BITBUCKET_PATH"
 	echo "Collecting bitbucket repositories for user '$1'"
 	# collect_repos "$BITBUCKET_API/repositories/$1" "bitbucket"
+}
+
+collect_github_org () {
+  echo "Collecting github information for organization $1"
+  collect_info "$GITHUB_API/orgs/$1" "attributes" "organization" "$1" "$GITHUB_PATH"
+  # Collect members (pagination)
+  collect_info "$GITHUB_API/orgs/$1" "attributes" "organization" "$1" "$GITHUB_PATH"
+	echo "Collecting github repositories for organization '$1'"
+  collect_repos_with_link_header_pagination "$GITHUB_PATH/repos" ">" "$1" \
+    "github" ".clone_url" ".name" "$GITHUB_PATH/repos"
+}
+
+collect_gitlab_org () {
+  echo "Collecting gitlab information for organization $1"
+  collect_info "$GITLAB_API/groups/$1" "attributes" "group" "$1" "$GITLAB_PATH"
+	echo "Collecting gitlab repositories for group '$1'"
+  collect_repos_with_link_header_pagination "$GITLAB_PATH/repos" "&per_page" "$1" \
+    "gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
 }
 
 collect_org () {
