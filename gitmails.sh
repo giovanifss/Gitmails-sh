@@ -256,7 +256,7 @@ collect_repos_with_link_header_pagination () {
 		qtd_pages=$(echo "${link_header}" | cut -d ',' -f2 | awk '{ gsub("'"$2"'", "\n") ; print $0 }' \
 			| head -n1 | rev | cut -d '=' -f1 | rev)
 	fi
-	pids=""
+	# pids=""
 	counter=1
 	while [ "${counter}" -le "${qtd_pages}" ]; do
 		repos=$(make_request "$1?page=${counter}")
@@ -264,14 +264,15 @@ collect_repos_with_link_header_pagination () {
 			echoerr "gitmails: Couldn't collect page ${counter} of ${qtd_pages} from $3 repositories in $4"
 			continue
 		fi
-		parse_repos "${repos}" "$4" "$5" "$6" "$7" &
-		pids="${pids} $!"
+		echo "Clonning repos page ${counter} of ${qtd_pages}"
+		parse_repos "${repos}" "$4" "$5" "$6" "$7"
+		# pids="${pids} $!"
 		# Sleep to wait previous clones to at least be closer to finishing
 		# Hopes to avoid too many git clone processes running at the same time
-		sleep 2
+		# sleep 2
 		true $(( counter++ ))
 	done
-	wait ${pids}
+	# wait ${pids}
 }
 
 pagination_bitbucket () {
