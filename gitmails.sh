@@ -235,20 +235,20 @@ parse_repo () {
 
 parse_repos () {
 	pids=""
-	counter=0
+	index=0
 	qtd_repos=$(expr `get_attr "$1" length` - 1)
-	while [ "${counter}" -lt "${qtd_repos}" ]; do
+	while [ "${index}" -lt "${qtd_repos}" ]; do
 		(
-			repo=$(get_attr "$1" ".[${counter}]")
+			repo=$(get_attr "$1" ".[${index}]")
 			parse_repo "${repo}" "$3" "$4" "$TMP_PATH/$2" "$5"
 		) &
 		pids="${pids} $!"
-		true $(( counter++ ))
+		true $(( index++ ))
 	done
 	wait ${pids}
 }
 
-collect_repos_with_link_header_pagination () {
+get_qtd_pages_from_link_header () {
 	result=$(make_request "$1" --head)
 	qtd_pages=1
 	link_header=$(echo "${result}" | grep "^Link" || true)
@@ -256,23 +256,24 @@ collect_repos_with_link_header_pagination () {
 		qtd_pages=$(echo "${link_header}" | cut -d ',' -f2 | awk '{ gsub("'"$2"'", "\n") ; print $0 }' \
 			| head -n1 | rev | cut -d '=' -f1 | rev)
 	fi
-	# pids=""
+	echo "${qtd_pages}"
+}
+
+collect_info_with_link_header_pagination () {
+	url="$1"; substr="$2"; target="$3"; info_type="$4"; service="$5"; function="$6"
+	shift 6
+	qtd_pages=$(get_qtd_pages_from_link_header "${url}" "${substr}")
 	counter=1
 	while [ "${counter}" -le "${qtd_pages}" ]; do
-		repos=$(make_request "$1?page=${counter}")
+		content=$(make_request "${url}?page=${counter}")
 		if [ $? -ne 0 ]; then
-			echoerr "gitmails: Couldn't collect page ${counter} of ${qtd_pages} from $3 repositories in $4"
+			echoerr "gitmails: couldn't collect page ${counter} of ${qtd_pages} from ${target} ${info_type} in ${service}"
 			continue
 		fi
-		echo "Clonning repos page ${counter} of ${qtd_pages}"
-		parse_repos "${repos}" "$4" "$5" "$6" "$7"
-		# pids="${pids} $!"
-		# Sleep to wait previous clones to at least be closer to finishing
-		# Hopes to avoid too many git clone processes running at the same time
-		# sleep 2
+		echo "Collecting page ${counter} of ${qtd_pages} of ${info_type}"
+		${function} "${content}" "${service}" $@
 		true $(( counter++ ))
 	done
-	# wait ${pids}
 }
 
 pagination_bitbucket () {
@@ -285,29 +286,12 @@ pagination_bitbucket () {
 	done
 }
 
-# $1 = url with api endpoint to collect repos
-# $2 = service_name (e.g. github)
-# $3 = field of url to clone location in json to be used with jq (e.g. .clone_url)
-# $4 = field of repository name to be used with jq (e.g. .name)
-# $5 = path to repos location (e.g. $GITHUB_PATH/repos)
-# TODO: PAGINATION
-collect_repos () {
-	# while pagination
-	repos=$(make_request "$1")
-	if [ $? -ne 0 ]; then
-		echoerr "gitmails: Couldn't collect $2 repositories"
-		return 1
-	fi
-	# get repos json from json if needed
-	parse_repos "${repos}" "$2" "$3" "$4" "$5"
-}
-
 collect_github_user () {
 	echo "Collecting github information for user '$1'"
 	collect_info "$GITHUB_API/users/$1" "attributes" "user" "$1" "$GITHUB_PATH"
 	echo "Collecting github repositories for user '$1'"
-	collect_repos_with_link_header_pagination "$GITHUB_API/users/$1/repos" ">" "$1" \
-		"github" ".clone_url" ".name" "$GITHUB_PATH/repos"
+	collect_info_with_link_header_pagination "$GITHUB_API/users/$1/repos" ">" "$1" \
+		"repositories" "github" "parse_repos" ".clone_url" ".name" "$GITHUB_PATH/repos"
 }
 
 collect_gitlab_user () {
@@ -318,8 +302,8 @@ collect_gitlab_user () {
 	collect_info "$GITLAB_API/users/${userid}/keys" "keys" "user" "$1" "$GITLAB_PATH"
 	collect_info "$GITLAB_API/users/${userid}/status" "status" "user" "$1" "$GITLAB_PATH"
 	echo "Collecting gitlab repositories for user '$1'"
-	collect_repos_with_link_header_pagination "$GITLAB_API/users/${userid}/projects" "&per_page" "$1" \
-		"gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
+	collect_info_with_link_header_pagination "$GITLAB_API/users/${userid}/projects" "&per_page" "$1" \
+		"repositories" "gitlab" "parse_repos" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
 }
 
 collect_bitbucket_user () {
@@ -330,25 +314,21 @@ collect_bitbucket_user () {
 }
 
 collect_github_org () {
-  echo "Collecting github information for organization $1"
-  collect_info "$GITHUB_API/orgs/$1" "attributes" "organization" "$1" "$GITHUB_PATH"
-  # Collect members (pagination)
-  collect_info "$GITHUB_API/orgs/$1" "attributes" "organization" "$1" "$GITHUB_PATH"
+	echo "Collecting github information for organization $1"
+	collect_info "$GITHUB_API/orgs/$1" "attributes" "organization" "$1" "$GITHUB_PATH"
+	collect_info_with_link_header_pagination "$GITHUB_API/orgs/$1/members" ">" "$1" \
+		"members" "github" "parse_members" ".clone_url" ".name" "$GITHUB_PATH/members"
 	echo "Collecting github repositories for organization '$1'"
-  collect_repos_with_link_header_pagination "$GITHUB_PATH/repos" ">" "$1" \
-    "github" ".clone_url" ".name" "$GITHUB_PATH/repos"
+	collect_info_with_link_header_pagination "$GITHUB_API/orgs/$1/repos" ">" "$1" \
+		"repositories" "github" "parse_repos" ".clone_url" ".name" "$GITHUB_PATH/repos"
 }
 
 collect_gitlab_org () {
-  echo "Collecting gitlab information for organization $1"
-  collect_info "$GITLAB_API/groups/$1" "attributes" "group" "$1" "$GITLAB_PATH"
+	echo "Collecting gitlab information for organization $1"
+	collect_info "$GITLAB_API/groups/$1" "attributes" "group" "$1" "$GITLAB_PATH"
 	echo "Collecting gitlab repositories for group '$1'"
-  collect_repos_with_link_header_pagination "$GITLAB_PATH/repos" "&per_page" "$1" \
-    "gitlab" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
-}
-
-collect_org () {
-	echo "bla"
+	collect_info_with_link_header_pagination "$GITLAB_API/groups/$1/projects" "&per_page" "$1" \
+		"repositories" "gitlab" "parse_repos" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
 }
 
 main () {
@@ -364,7 +344,12 @@ main () {
 				collect_gitlab_user "$TARGET"
 			fi;;
 		org)
-			collect_org  "$TARGET";;
+			if $GITHUB; then
+				collect_github_org "$TARGET"
+			fi
+			if $GITLAB; then
+				collect_gitlab_org "$TARGET"
+			fi;;
 	esac
 }
 
