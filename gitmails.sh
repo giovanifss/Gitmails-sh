@@ -36,11 +36,11 @@ echoerr () {
 }
 
 get_attr () {
-	echo "$1" | jq "$2"
+	echo "$1" | tr '\r\n' ' ' | jq "$2"
 }
 
 get_raw_attr () {
-	echo "$1" | jq -r "$2"
+	echo "$1" | tr '\r\n' ' ' | jq -r "$2"
 }
 
 check_second_arg () {
@@ -250,6 +250,10 @@ parse_repos () {
 
 get_qtd_pages_from_link_header () {
 	result=$(make_request "$1" --head)
+	if [ $? -ne 0 ]; then
+		echoerr "gitmails: could not collect headers from $1"
+		return 1
+	fi
 	qtd_pages=1
 	link_header=$(echo "${result}" | grep "^Link" || true)
 	if [ ! -z "${link_header}" ]; then
@@ -271,19 +275,31 @@ collect_info_with_link_header_pagination () {
 			continue
 		fi
 		echo "Collecting page ${counter} of ${qtd_pages} of ${info_type}"
-		${function} "${content}" "${service}" $@
+		${function} "${content}" "${service}" "$@"
 		true $(( counter++ ))
 	done
 }
 
+get_next_bitbucket () {
+	next=$(get_raw_attr "$1" ".next")
+	if [ -z "${next}" ]; then
+		return 1
+	fi
+	echo "${next}"
+}
+
 pagination_bitbucket () {
-	result=$(curl --silent "$1")
-	parse_repos # echo ${results} | jq .values
-	while echo "${result}" | jq -re '.next'; do
-		url=$(echo "${result}" | jq -re '.next')
-		result=$(make_request "${url}")
-		parse_repos # echo ${results} | jq .values
-	done
+	url="$1"; function="$2"
+	shift 2
+	result=$(make_request "${url}")
+	if [ $? -ne 0 ]; then
+		echoerr "gitmails: couldn't collect bitbucket page"
+		return 1
+	fi
+	${function} "$(get_attr "${result}" '.values')" "$@"
+	if next=$(get_next_bitbucket "${result}"); then
+		pagination_bitbucket "${next}" "${function}" "$@"
+	fi
 }
 
 collect_github_user () {
@@ -297,6 +313,10 @@ collect_github_user () {
 collect_gitlab_user () {
 	echo "Collecting gitlab information for user '$1'"
 	users=$(make_request "$GITLAB_API/users?username=$1")
+	if [ $? -ne 0 ]; then
+		echoerr "gitmails: couldn't collect userid for user '$1'"
+		return 1
+	fi
 	userid=$(get_raw_attr "${users}" ".[0].id")
 	collect_info "$GITLAB_API/users/${userid}" "attributes" "user" "$1" "$GITLAB_PATH"
 	collect_info "$GITLAB_API/users/${userid}/keys" "keys" "user" "$1" "$GITLAB_PATH"
@@ -310,7 +330,8 @@ collect_bitbucket_user () {
 	echo "Collecting bitbucket information for user '$1'"
 	collect_info "$BITBUCKET_API/users/$1" "attributes" "user" "$1" "$BITBUCKET_PATH"
 	echo "Collecting bitbucket repositories for user '$1'"
-	# collect_repos "$BITBUCKET_API/repositories/$1" "bitbucket"
+	pagination_bitbucket "$BITBUCKET_API/repositories/$1" "parse_repos" "bitbucket" ".links.clone | .[0].href" \
+		".name" "$BITBUCKET_PATH/repos"
 }
 
 collect_github_org () {
@@ -342,6 +363,9 @@ main () {
 			fi
 			if $GITLAB; then
 				collect_gitlab_user "$TARGET"
+			fi
+			if $BITBUCKET; then
+				collect_bitbucket_user "$TARGET"
 			fi;;
 		org)
 			if $GITHUB; then
@@ -354,5 +378,5 @@ main () {
 }
 
 check_dependencies
-parse_args $@
+parse_args "$@"
 main
