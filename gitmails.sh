@@ -9,7 +9,7 @@ trap "echo -e '\nAborting...'" INT
 GITHUB_API="https://api.github.com"
 GITLAB_API="https://gitlab.com/api/v4"
 BITBUCKET_API="https://api.bitbucket.org/2.0"
-DEPENDENCIES="tr jq awk sed cat git echo curl sort uniq mkdir"
+DEPENDENCIES="tr jq awk sed cat git echo curl sort find uniq mkdir"
 
 #------------------
 # Gitmails Options
@@ -19,6 +19,7 @@ TARGET_TYPE=""
 
 TMP_PATH=""
 BASE_PATH="/tmp/gitmails"
+TARGET_PATH=""
 GITHUB_PATH=""
 GITLAB_PATH=""
 BITBUCKET_PATH=""
@@ -91,13 +92,15 @@ check_dependencies () {
 set_variables () {
 	if [ "$TARGET_TYPE" == "repo" ]; then
 		export TMP_PATH="$BASE_PATH/tmp/repos"
+		export TARGET_PATH="$BASE_PATH"
 	else
 		export TMP_PATH="$BASE_PATH/tmp/$TARGET"
+		export TARGET_PATH="$BASE_PATH/$TARGET"
 	fi
-	export REPOS_PATH="$BASE_PATH/repos"
-	export GITHUB_PATH="$BASE_PATH/$TARGET/github"
-	export GITLAB_PATH="$BASE_PATH/$TARGET/gitlab"
-	export BITBUCKET_PATH="$BASE_PATH/$TARGET/bitbucket"
+	export REPOS_PATH="$TARGET_PATH/repos"
+	export GITHUB_PATH="$TARGET_PATH/github"
+	export GITLAB_PATH="$TARGET_PATH/gitlab"
+	export BITBUCKET_PATH="$TARGET_PATH/bitbucket"
 }
 
 display_help () {
@@ -214,6 +217,18 @@ analyze_repo () {
 	)
 }
 
+count_uniques () {
+	for filename in $3; do
+		uniques=$(find "$1/$2" -name "${filename}" -exec cat {} \; | tr -s ' ' | cut -d ' ' -f3- | sort -u)
+		IFS="$(printf '\n ')" && IFS="${IFS% }"
+		for unique in ${uniques}; do
+			find "$1/$2" -name "${filename}" -exec cat {} \; | grep "${unique}" | \
+				awk -F ' ' '{sum+=$1} END {$1=""; sep=")"; print sum sep $0}' >> "$1/$2_${filename}"
+		done
+		unset IFS
+	done
+}
+
 collect_info () {
 	info=$(make_request "$1")
 	if [ $? -ne 0 ]; then
@@ -308,6 +323,7 @@ collect_github_user () {
 	echo "Collecting github repositories for user '$1'"
 	collect_info_with_link_header_pagination "$GITHUB_API/users/$1/repos" ">" "$1" \
 		"repositories" "github" "parse_repos" ".clone_url" ".name" "$GITHUB_PATH/repos"
+	count_uniques "$GITHUB_PATH" "repos" "authors commiters mailmap_authors mailmap_commiters signer_info"
 }
 
 collect_gitlab_user () {
@@ -324,6 +340,7 @@ collect_gitlab_user () {
 	echo "Collecting gitlab repositories for user '$1'"
 	collect_info_with_link_header_pagination "$GITLAB_API/users/${userid}/projects" "&per_page" "$1" \
 		"repositories" "gitlab" "parse_repos" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
+	count_uniques "$GITLAB_PATH" "repos" "authors commiters mailmap_authors mailmap_commiters signer_info"
 }
 
 collect_bitbucket_user () {
@@ -332,6 +349,7 @@ collect_bitbucket_user () {
 	echo "Collecting bitbucket repositories for user '$1'"
 	pagination_bitbucket "$BITBUCKET_API/repositories/$1" "parse_repos" "bitbucket" ".links.clone | .[0].href" \
 		".name" "$BITBUCKET_PATH/repos"
+	count_uniques "$BITBUCKET_PATH" "repos" "authors commiters mailmap_authors mailmap_commiters signer_info"
 }
 
 collect_github_org () {
@@ -342,6 +360,7 @@ collect_github_org () {
 	echo "Collecting github repositories for organization '$1'"
 	collect_info_with_link_header_pagination "$GITHUB_API/orgs/$1/repos" ">" "$1" \
 		"repositories" "github" "parse_repos" ".clone_url" ".name" "$GITHUB_PATH/repos"
+	count_uniques "$GITHUB_PATH" "repos" "authors commiters mailmap_authors mailmap_commiters signer_info"
 }
 
 collect_gitlab_org () {
@@ -350,31 +369,48 @@ collect_gitlab_org () {
 	echo "Collecting gitlab repositories for group '$1'"
 	collect_info_with_link_header_pagination "$GITLAB_API/groups/$1/projects" "&per_page" "$1" \
 		"repositories" "gitlab" "parse_repos" ".http_url_to_repo" ".name" "$GITLAB_PATH/repos"
+	count_uniques "$GITLAB_PATH" "repos" "authors commiters mailmap_authors mailmap_commiters signer_info"
 }
 
-main () {
-	case "$TARGET_TYPE" in
+perform_collection () {
+	case "$1" in
 		repo)
-			repo_name=$(echo "$TARGET" | awk -F "://" '{print $2}' | tr '/' '_')
-			analyze_repo "$TARGET" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}";;
+			repo_name=$(echo "$2" | awk -F "://" '{print $2}' | tr '/' '_')
+			analyze_repo "$2" "$TMP_PATH/${repo_name}" "$REPOS_PATH/${repo_name}";;
 		user)
 			if $GITHUB; then
-				collect_github_user "$TARGET"
+				collect_github_user "$2"
 			fi
 			if $GITLAB; then
-				collect_gitlab_user "$TARGET"
+				collect_gitlab_user "$2"
 			fi
 			if $BITBUCKET; then
-				collect_bitbucket_user "$TARGET"
+				collect_bitbucket_user "$2"
 			fi;;
 		org)
 			if $GITHUB; then
-				collect_github_org "$TARGET"
+				collect_github_org "$2"
 			fi
 			if $GITLAB; then
-				collect_gitlab_org "$TARGET"
+				collect_gitlab_org "$2"
 			fi;;
 	esac
+}
+
+output_info () {
+	for filename in $(find "$1" -type f -maxdepth 2 '!' -name attributes); do
+		echo $(echo "${filename}" | rev | cut -d '/' -f1 | rev)
+		IFS="$(printf '\n ')" && IFS="${IFS% }"
+		for line in $(cat "${filename}" | sort -n); do
+			echo -e "\t${line}"
+		done
+		unset IFS
+	done
+}
+
+main () {
+	perform_collection "$TARGET_TYPE" "$TARGET"
+	output_info "$TARGET_PATH"
 }
 
 check_dependencies
